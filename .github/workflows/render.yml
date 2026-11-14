@@ -1,0 +1,39 @@
+name: Render Telegram video
+run-name: tempo-${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Unique n8n execution ID
+        required: true
+        type: string
+      file_id:
+        description: Telegram file ID from the selected test bot
+        required: true
+        type: string
+      plan_json:
+        description: Validated JSON array of overlays
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - run: pip install 'Pillow>=10.4,<13'
+      - name: Download source and render without changing original audio
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: python render_job.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tempo-${{ inputs.request_id }}
+          path: job/result.mp4
+          retention-days: 1
