@@ -139,7 +139,7 @@ def compose(frame,item,layers,elapsed,remaining):
             bounds=im.getchannel('A').crop((0,top,im.width,bottom)).getbbox()
             if not bounds: continue
             left,yt,right,yb=bounds
-            px=max(4,round(w*.014)); py=max(2,round(w*.004))
+            px=max(4,round(w*.014)); py=max(3,round(w*.008))
             sd.rounded_rectangle((x+dx+left-px,y+dy+top+yt-py,x+dx+right+px,y+dy+top+yb+py),radius=max(3,round(w*.012)),fill=(15,18,24,round(165*fade)))
         canvas=Image.alpha_composite(canvas,shade)
         canvas.alpha_composite(im,(x+dx,y+dy))
@@ -178,7 +178,7 @@ def typing_audio(path,plan,duration):
             for k in range(round(rate*.028)):
                 if offset+k>=len(samples): break
                 envelope=math.exp(-k/(rate*.006))
-                value=int(9600*envelope*(.7*rng.uniform(-1,1)+.3*math.sin(2*math.pi*1600*k/rate)))
+                value=int(4800*envelope*(.7*rng.uniform(-1,1)+.3*math.sin(2*math.pi*1600*k/rate)))
                 samples[offset+k]=max(-32768,min(32767,samples[offset+k]+value))
     with wave.open(str(path),'wb') as f:
         f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate); f.writeframes(samples.tobytes())
