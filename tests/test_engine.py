@@ -17,7 +17,7 @@ class PlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             src=Path(td)/'in.mp4'; out=Path(td)/'out.mp4'
             sp.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=0x343c50:s=360x640:r=30:d=3','-f','lavfi','-i','sine=frequency=440:duration=3','-c:v','libx264','-c:a','aac',str(src)],check=True)
-            render(src,out,[dict(start=.4,end=2.5,kind='stat',text='30 секунд',label='Исходный звук')])
+            render(src,out,[dict(start=.4,end=2.5,kind='stat',text='30 секунд',label='Исходный звук')],typing_sound=False)
             def packets(p):
                 data=json.loads(sp.check_output(['ffprobe','-v','error','-select_streams','a:0','-show_packets','-show_data_hash','sha256','-of','json',str(p)]))
                 return [v['data_hash'] for v in data['packets']]
@@ -28,3 +28,4 @@ class PlanTests(unittest.TestCase):
             self.assertNotEqual(frame(src),frame(out))
 
 if __name__=='__main__': unittest.main()
+
