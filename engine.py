@@ -52,9 +52,12 @@ def plan_overlays(segments, duration, key, model):
 
 
 def font(size, bold=True):
-    root=Path('/usr/share/fonts/truetype/dejavu')
-    path=os.getenv('OVERLAY_FONT') or str(root / ('DejaVuSans-Bold.ttf' if bold else 'DejaVuSans.ttf'))
-    return ImageFont.truetype(path,size)
+    from glob import glob
+    custom = os.getenv('OVERLAY_FONT')
+    candidates = glob('/usr/share/fonts/**/*Comfortaa*Bold*.ttf', recursive=True)
+    candidates += glob('/usr/share/fonts/**/*Comfortaa*.ttf', recursive=True)
+    fallback = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    return ImageFont.truetype(custom or (candidates[0] if candidates else fallback), size)
 
 
 def wrap(draw, text, f, width):
@@ -69,94 +72,83 @@ def wrap(draw, text, f, width):
 
 
 def card(item, width):
-    """Separate typographic layers, optically centered, rendered at 2x."""
-    scale = 2
-    w = int(width * .86) * scale
-    pad = max(8, int(width * .018)) * scale
-    d = ImageDraw.Draw(Image.new('RGBA', (w, 1)))
-    size = int(width * (.19 if item['kind'] == 'stat' else .105)) * scale
+    # Small editorial callouts; a maximum of three lines, never a full-screen title.
+    scale=2; w=round(width*.65)*scale; pad=round(width*.018)*scale
+    d=ImageDraw.Draw(Image.new('RGBA',(w,1)))
+    size=round(width*(.072 if item['kind']=='stat' else .058))*scale
     while True:
-        f = font(max(12, size))
-        lines = wrap(d, item['text'], f, w - 2 * pad)
-        if len(lines) <= 3 and all(d.textlength(line, font=f) <= w-2*pad for line in lines):
-            break
-        size -= 2
-        if size < 12:
-            raise ValueError('Overlay text cannot fit')
-    small = font(max(14, int(width * .034)) * scale, False)
-    labels = wrap(d, item['label'], small, w-2*pad)
-    line_h = int(size * 1.18)
-    label_h = int(small.size * 1.4)
-    gap = int(width * .032) * scale
-    h = pad*2 + len(lines)*line_h + gap + len(labels)*label_h
-    title = Image.new('RGBA', (w, h)); draw = ImageDraw.Draw(title)
-    y = pad
+        f=font(max(12,size)); lines=wrap(d,item['text'],f,w-2*pad)
+        if len(lines)<=3 and all(d.textlength(v,font=f)<=w-2*pad for v in lines): break
+        size-=2
+        if size<12: raise ValueError('Overlay text cannot fit')
+    small=font(max(12,round(width*.034))*scale,False)
+    labels=wrap(d,item['label'],small,w-2*pad)
+    lh=round(size*1.35); sh=round(small.size*1.45)
+    gap=round(width*.025)*scale
+    h=pad*2+len(lines)*lh+gap+len(labels)*sh
+    title=Image.new('RGBA',(w,h)); detail=title.copy()
+    y=pad
     for line in lines:
-        # textbbox top correction keeps Cyrillic ascenders inside the layer.
-        x = (w-draw.textlength(line, font=f))/2
-        draw.text((x, y-f.getbbox(line)[1]), line, font=f, fill=(250,250,252,255))
-        y += line_h
-    detail = Image.new('RGBA', (w,h)); draw = ImageDraw.Draw(detail)
-    y += gap
+        ImageDraw.Draw(title).text((pad,y-f.getbbox(line)[1]),line,font=f,fill=(255,254,248,255),stroke_width=max(1,round(width*.002)*scale),stroke_fill=(12,16,23,180))
+        y+=lh
     for line in labels:
-        x = (w-draw.textlength(line, font=small))/2
-        draw.text((x, y-small.getbbox(line)[1]), line, font=small, fill=(225,228,235,255))
-        y += label_h
-    return tuple(im.resize((w//scale,h//scale), Image.Resampling.LANCZOS) for im in (title,detail))
+        ImageDraw.Draw(detail).text((pad,y+gap-small.getbbox(line)[1]),line,font=small,fill=(245,244,235,255),stroke_width=scale,stroke_fill=(12,16,23,190))
+        y+=sh
+    return tuple(im.resize((w//scale,h//scale),Image.Resampling.LANCZOS) for im in (title,detail)),round((pad+len(lines)*lh)/scale)
 
 
 def ease(value):
-    value = max(0., min(1., value))
-    return 1 - (1-value)**4
+    return 1-(1-max(0.,min(1.,value)))**3
 
 
-def compose(frame, item, layers, elapsed, remaining):
-    """Keynote direction: quiet scrim, hero type and delayed supporting copy."""
-    w,h = frame.size
-    entrance = ease(elapsed/.65)
-    exit_alpha = min(1., remaining/.3)
-    opacity = min(1., elapsed/.24) * exit_alpha
-    # Soft local vignette preserves the footage without a visible card boundary.
-    scrim = Image.new('RGBA', (1,h))
-    pixels = scrim.load()
-    center = h*.68
-    for y in range(h):
-        pixels[0,y] = (5,7,12,int(145*opacity*math.exp(-((y-center)/(h*.19))**2)))
-    frame = Image.alpha_composite(frame.convert('RGBA'), scrim.resize((w,h)))
-    for index,layer in enumerate(layers):
-        delay = .16 if index else 0.
-        reveal = ease((elapsed-delay)/.55)
-        alpha = min(1., max(0.,(elapsed-delay)/.25)) * exit_alpha
-        if alpha <= 0:
-            continue
-        zoom = .975 + .025*entrance if index == 0 else 1.
-        graphic = layer.resize((max(1,round(layer.width*zoom)), max(1,round(layer.height*zoom))),Image.Resampling.LANCZOS)
-        # A brief soft-to-sharp entrance; no bouncing or decorative neon.
-        blur = (1-reveal)*w*.006
-        if blur > .3:
-            graphic = graphic.filter(ImageFilter.GaussianBlur(blur))
-        # A single warm-white light pass, clipped to the headline glyphs.
-        # It vanishes after the entrance; footage never receives a flash.
-        if index == 0 and .06 < elapsed < .62:
-            phase = (elapsed-.06)/.56
-            band = Image.new('RGBA', graphic.size)
-            bd = ImageDraw.Draw(band)
-            center = (-.2+1.4*phase)*graphic.width
-            radius = max(2, round(graphic.width*.09))
-            strength = math.sin(math.pi*phase)*.85
-            for x in range(max(0,int(center-radius*3)),min(graphic.width,int(center+radius*3)+1)):
-                intensity = int(255*strength*math.exp(-((x-center)/radius)**2))
-                bd.line((x,0,x,graphic.height),fill=(255,224,171,intensity))
-            from PIL import ImageChops
-            band.putalpha(ImageChops.multiply(band.getchannel('A'),graphic.getchannel('A')))
-            halo = band.filter(ImageFilter.GaussianBlur(max(1,w*.006)))
-            graphic = Image.alpha_composite(graphic,halo)
-            graphic = Image.alpha_composite(graphic,band)
-        graphic.putalpha(graphic.getchannel('A').point(lambda a: round(a*alpha)))
-        y = round(h*.68-graphic.height/2+(1-reveal)*h*.025)
-        y = max(round(h*.08), min(y,h-graphic.height-round(h*.14)))
-        frame.alpha_composite(graphic, ((w-graphic.width)//2,y))
-    return frame.convert('RGB')
+def compose(frame,item,layers,elapsed,remaining):
+    w,h=frame.size; (title,detail),baseline=layers
+    slot=item.get('_slot',0)%4
+    # Alternate upper-left, lower-right, upper-right and lower-left safe areas.
+    right=slot in (1,2); upper=slot in (0,2)
+    x=round(w*.07) if not right else w-title.width-round(w*.07)
+    y=round(h*.19) if upper else round(h*.64)
+    y=min(y,h-title.height-round(h*.18))
+    fade=min(1.,elapsed/.22,remaining/.25)
+    canvas=frame.convert('RGBA')
+    # A feathered local shadow, no dark rectangle or global dimming.
+    shade=Image.new('RGBA',(w,h)); sd=ImageDraw.Draw(shade)
+    sd.ellipse((x-w*.08,y-h*.035,x+title.width+w*.08,y+title.height+h*.035),fill=(4,9,17,round(125*fade)))
+    canvas=Image.alpha_composite(canvas,shade.filter(ImageFilter.GaussianBlur(w*.055)))
+    for i,layer in enumerate((title,detail)):
+        p=ease((elapsed-i*.13)/.46)
+        opacity=min(1.,max(0.,(elapsed-i*.13)/.2),remaining/.25)
+        im=layer.copy(); im.putalpha(im.getchannel('A').point(lambda a:round(a*opacity)))
+        dx=round((1-p)*w*.045)*(1 if right else -1)
+        canvas.alpha_composite(im,(x+dx,y+round((1-p)*h*.008)))
+    ink=Image.new('RGBA',(w,h)); d=ImageDraw.Draw(ink)
+    color=(255,209,105,round(245*fade))
+    # Curved, drawn-on underline; the endpoint advances with the entrance.
+    length=min(title.width*.8,w*.42)
+    progress=ease((elapsed-.12)/.55)
+    points=[]
+    for n in range(max(2,round(60*progress))):
+        t=n/59
+        points.append((x+w*.018+length*t,y+baseline+h*.007+math.sin(t*math.pi)*h*.004))
+    d.line(points,fill=color,width=max(2,round(w*.006)),joint='curve')
+    # A dotted bent leader draws outward to an abstract endpoint, not a tracked object.
+    ax=x+title.width*.8 if not right else x+title.width*.18
+    ay=y-h*.025 if upper else y+title.height+h*.025
+    sign=-1 if upper else 1
+    path=[(ax,ay),(ax+(-1 if right else 1)*w*.065,ay+sign*h*.035),(ax+(-1 if right else 1)*w*.1,ay+sign*h*.075)]
+    travel=ease((elapsed-.28)/.65)
+    for seg in range(2):
+        a,b=path[seg],path[seg+1]
+        for j in range(10):
+            t=j/10
+            if (seg+t)/2>travel: break
+            u=min(1,t+.045)
+            d.line((a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[0]+(b[0]-a[0])*u,a[1]+(b[1]-a[1])*u),fill=color,width=max(2,round(w*.004)))
+    if travel>.98:
+        tip=path[-1]; prev=path[-2]; angle=math.atan2(tip[1]-prev[1],tip[0]-prev[0])
+        for offset in (-.55,.55):
+            d.line((tip[0],tip[1],tip[0]-w*.025*math.cos(angle+offset),tip[1]-w*.025*math.sin(angle+offset)),fill=color,width=max(2,round(w*.004)))
+    return Image.alpha_composite(canvas,ink).convert('RGB')
 
 
 def render(source, output, plan, progress=None):
@@ -170,6 +162,7 @@ def render(source, output, plan, progress=None):
     duration=float(meta['format']['duration']); plan=validate_plan(plan,duration)
     fps=30
     output.parent.mkdir(parents=True,exist_ok=True)
+    for index,item in enumerate(plan): item['_slot']=index
     cards=[card(i,w) for i in plan]
     with tempfile.TemporaryDirectory() as td:
         silent=Path(td)/'visual.mp4'
