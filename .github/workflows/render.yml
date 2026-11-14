@@ -26,9 +26,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-comfortaa
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation cabextract curl
+      - name: Install Times New Roman from Microsoft core fonts distribution
+        run: |
+          mkdir -p /tmp/corefonts
+          sudo mkdir -p /usr/share/fonts/truetype/msttcorefonts
+          curl --fail --location --retry 3 https://downloads.sourceforge.net/corefonts/times32.exe -o /tmp/corefonts/times32.exe
+          cabextract -q -d /tmp/corefonts /tmp/corefonts/times32.exe
+          for f in /tmp/corefonts/*; do
+            case "$f" in
+              *.[tT][tT][fF]) sudo cp "$f" "/usr/share/fonts/truetype/msttcorefonts/$(basename "$f" | tr '[:upper:]' '[:lower:]')" ;;
+            esac
+          done
+          test -f /usr/share/fonts/truetype/msttcorefonts/times.ttf
       - run: pip install 'Pillow>=10.4,<13'
-      - name: Download source and render without changing original audio
+      - name: Download source and render with typing sound
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: python render_job.py
