@@ -54,9 +54,9 @@ def plan_overlays(segments, duration, key, model):
 def font(size, bold=True):
     from glob import glob
     custom = os.getenv('OVERLAY_FONT')
-    candidates = glob('/usr/share/fonts/**/*Comfortaa*Bold*.ttf', recursive=True)
-    candidates += glob('/usr/share/fonts/**/*Comfortaa*.ttf', recursive=True)
-    fallback = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    candidates = glob('/usr/share/fonts/**/timesbd.ttf', recursive=True) if bold else glob('/usr/share/fonts/**/times.ttf', recursive=True)
+    candidates += glob('/usr/share/fonts/**/Times_New_Roman*.ttf', recursive=True)
+    fallback = '/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf'
     return ImageFont.truetype(custom or (candidates[0] if candidates else fallback), size)
 
 
@@ -119,10 +119,11 @@ def compose(frame,item,layers,elapsed,remaining):
     y=min(y,h-title.height-round(h*.18))
     fade=min(1.,elapsed/.22,remaining/.25)
     canvas=frame.convert('RGBA')
-    # A feathered local shadow, no dark rectangle or global dimming.
+    # Translucent rounded backplate remains legible on white or busy footage.
     shade=Image.new('RGBA',(w,h)); sd=ImageDraw.Draw(shade)
-    sd.ellipse((x-w*.08,y-h*.035,x+title.width+w*.08,y+title.height+h*.035),fill=(4,9,17,round(125*fade)))
-    canvas=Image.alpha_composite(canvas,shade.filter(ImageFilter.GaussianBlur(w*.055)))
+    padding=round(w*.025)
+    sd.rounded_rectangle((x-padding,y-padding,x+title.width+padding,y+title.height+padding),radius=round(w*.035),fill=(15,18,24,round(165*fade)))
+    canvas=Image.alpha_composite(canvas,shade)
     for i,layer in enumerate((title,detail)):
         p=ease((elapsed-i*.13)/.46)
         opacity=min(1.,max(0.,(elapsed-i*.13)/.2),remaining/.25)
@@ -142,7 +143,7 @@ def compose(frame,item,layers,elapsed,remaining):
     points=[]
     for n in range(max(2,round(60*progress))):
         t=n/59
-        points.append((x+w*.018+length*t,y+baseline+h*.007+math.sin(t*math.pi)*h*.004))
+        points.append((x+w*.018+length*t,y+baseline+h*.007))
     d.line(points,fill=color,width=max(2,round(w*.006)),joint='curve')
     # A tiny typing cursor follows the newest glyph, then fades away.
     if 0 < visible < total and int(elapsed*8)%2 == 0:
@@ -169,7 +170,7 @@ def typing_audio(path,plan,duration):
             for k in range(round(rate*.018)):
                 if offset+k>=len(samples): break
                 envelope=math.exp(-k/(rate*.0035))
-                value=int(400*envelope*(.7*rng.uniform(-1,1)+.3*math.sin(2*math.pi*1600*k/rate)))
+                value=int(2400*envelope*(.7*rng.uniform(-1,1)+.3*math.sin(2*math.pi*1600*k/rate)))
                 samples[offset+k]=max(-32768,min(32767,samples[offset+k]+value))
     with wave.open(str(path),'wb') as f:
         f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate); f.writeframes(samples.tobytes())
