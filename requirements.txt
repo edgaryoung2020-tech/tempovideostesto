@@ -1,0 +1,4 @@
+Pillow>=10.4,<13
+faster-whisper>=1.1,<2
+openai>=1.66,<3
+streamlit>=1.41,<2
