@@ -164,7 +164,7 @@ def compose(frame,item,layers,elapsed,remaining):
 
 
 def typing_audio(path,plan,duration):
-    """Quiet dry key taps, synthesized locally without external music assets."""
+    """Soft, sparse key taps with rounded attacks and filtered noise."""
     import wave, random
     from array import array
     rate=24000
@@ -173,12 +173,23 @@ def typing_audio(path,plan,duration):
     for item in plan:
         count=len(item['text'])+len(item['label'])
         span=min(1.6,max(.45,(item['end']-item['start'])*.55))
+        last=-1.
         for j in range(count):
-            offset=round((item['start']+j/max(1,count)*span)*rate)
-            for k in range(round(rate*.028)):
+            moment=item['start']+j/max(1,count)*span
+            if moment-last < .095: continue
+            last=moment
+            offset=round(moment*rate)
+            tone=rng.uniform(330,430)
+            level=rng.uniform(.85,1.)
+            filtered=0.
+            for k in range(round(rate*.045)):
                 if offset+k>=len(samples): break
-                envelope=math.exp(-k/(rate*.006))
-                value=int(4800*envelope*(.7*rng.uniform(-1,1)+.3*math.sin(2*math.pi*1600*k/rate)))
+                t=k/rate
+                # Smooth attack removes the sharp crack; low-pass noise adds texture.
+                envelope=(1-math.exp(-t/.002))*math.exp(-t/.009)
+                filtered=.88*filtered+.12*rng.uniform(-1,1)
+                body=.7*math.sin(2*math.pi*tone*t)+.16*math.sin(2*math.pi*tone*1.6*t)
+                value=int(2300*level*envelope*(body+.3*filtered))
                 samples[offset+k]=max(-32768,min(32767,samples[offset+k]+value))
     with wave.open(str(path),'wb') as f:
         f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate); f.writeframes(samples.tobytes())
