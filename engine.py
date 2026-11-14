@@ -71,91 +71,91 @@ def wrap(draw, text, f, width):
     return lines
 
 
-def editorial_font(size, role):
-    from glob import glob
-    if role == 'label':
-        paths=['/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf']
-    else:
-        filename='timesi.ttf' if role=='headline' else 'times.ttf'
-        paths=glob('/usr/share/fonts/**/'+filename,recursive=True)
-        fallback='LiberationSerif-Italic.ttf' if role=='headline' else 'LiberationSerif-Regular.ttf'
-        paths+=glob('/usr/share/fonts/**/'+fallback,recursive=True)
-    for path in paths:
-        if Path(path).exists(): return ImageFont.truetype(path,size)
-    raise ValueError('Editorial font missing: '+role)
-
-
-def card(item,width):
-    # One composed editorial object; the paper and all text share a stable grid.
-    scale=2; maximum=round(width*.75)*scale; pad=round(width*.04)*scale
-    draw=ImageDraw.Draw(Image.new('RGBA',(maximum,1)))
-    stat=item['kind']=='stat'
-    size=round(width*(.125 if stat and len(item['text'])<10 else .088))*scale
+def card(item, width):
+    # Small editorial callouts; a maximum of three lines, never a full-screen title.
+    scale=2; w=round(width*.65)*scale; pad=round(width*.018)*scale
+    d=ImageDraw.Draw(Image.new('RGBA',(w,1)))
+    size=round(width*(.090 if item['kind']=='stat' else .0725))*scale
     while True:
-        face=editorial_font(max(12,size),'number' if stat else 'headline')
-        lines=wrap(draw,item['text'],face,maximum-2*pad)
-        if len(lines)<=3 and all(draw.textlength(v,font=face)<=maximum-2*pad for v in lines): break
+        f=font(max(12,size)); lines=wrap(d,item['text'],f,w-2*pad)
+        if len(lines)<=3 and all(d.textlength(v,font=f)<=w-2*pad for v in lines): break
         size-=2
-        if size<12: raise ValueError('Headline cannot fit')
-    label_face=editorial_font(round(width*.036)*scale,'label')
-    labels=wrap(draw,item['label'],label_face,maximum-2*pad)
-    text_width=max([draw.textlength(v,font=face) for v in lines]+[draw.textlength(v,font=label_face) for v in labels]+[width*.26*scale])
-    cw=min(maximum,math.ceil(text_width)+2*pad)
-    lh=round(size*1.12); sh=round(label_face.size*1.45)
-    gap=round(width*.028)*scale if labels else 0
-    header=round(width*.034)*scale
-    ch=2*pad+header+round(width*.022)*scale+len(lines)*lh+gap+len(labels)*sh
-    headline=Image.new('RGBA',(cw,ch)); detail=headline.copy()
-    d=ImageDraw.Draw(headline); y=pad+header+round(width*.022)*scale
+        if size<12: raise ValueError('Overlay text cannot fit')
+    small=font(max(12,round(width*.053))*scale,True)
+    labels=wrap(d,item['label'],small,w-2*pad)
+    lh=round(size*1.35); sh=round(small.size*1.45)
+    gap=round(width*.025)*scale
+    h=pad*2+len(lines)*lh+gap+len(labels)*sh
+    title=Image.new('RGBA',(w,h)); detail=title.copy()
+    y=pad
+    glyphs=[[],[]]
     for line in lines:
-        box=face.getbbox(line)
-        d.text((pad-box[0],y-box[1]),line,font=face,fill=(24,27,29,255))
+        ImageDraw.Draw(title).text((pad,y-f.getbbox(line)[1]),line,font=f,fill=(255,254,248,255),stroke_width=max(1,round(width*.0025)*scale),stroke_fill=(12,16,23,180))
+        for j,ch in enumerate(line):
+            glyphs[0].append((round((pad+d.textlength(line[:j],font=f))/scale)-2,round(y/scale)-2,round((pad+d.textlength(line[:j+1],font=f))/scale)+3,round((y+lh)/scale)))
         y+=lh
-    d=ImageDraw.Draw(detail); y+=gap
     for line in labels:
-        box=label_face.getbbox(line)
-        d.text((pad-box[0],y-box[1]),line,font=label_face,fill=(65,69,71,255))
+        ImageDraw.Draw(detail).text((pad,y+gap-small.getbbox(line)[1]),line,font=small,fill=(255,209,105,255),stroke_width=scale,stroke_fill=(12,16,23,190))
+        for j,ch in enumerate(line):
+            glyphs[1].append((round((pad+d.textlength(line[:j],font=small))/scale)-2,round((y+gap)/scale)-2,round((pad+d.textlength(line[:j+1],font=small))/scale)+3,round((y+gap+sh)/scale)))
         y+=sh
-    target=(math.ceil(cw/scale),math.ceil(ch/scale))
-    return dict(title=headline.resize(target,Image.Resampling.LANCZOS),detail=detail.resize(target,Image.Resampling.LANCZOS),pad=pad//scale,header=header//scale)
+    return tuple(im.resize((w//scale,h//scale),Image.Resampling.LANCZOS) for im in (title,detail)),round((pad+len(lines)*lh)/scale),glyphs
 
 
 def ease(value):
-    return 1-(1-max(0.,min(1.,value)))**4
+    return 1-(1-max(0.,min(1.,value)))**3
 
 
 def compose(frame,item,layers,elapsed,remaining):
-    w,h=frame.size; title=layers['title']; detail=layers['detail']
+    w,h=frame.size; (title,detail),baseline,glyphs=layers
+    total=sum(map(len,glyphs))
+    typing_duration=min(1.6,max(.45,(item['end']-item['start'])*.55))
+    typed=min(float(total),max(0.,elapsed/typing_duration*total))
+    visible=min(total,int(typed)+1)
     slot=item.get('_slot',0)%4
-    right=slot in (1,2); upper=slot in (0,2)
-    x=round(w*.075) if not right else w-title.width-round(w*.12)
-    y=round(h*.17) if upper else round(h*.60)
-    y=max(round(h*.1),min(y,h-title.height-round(h*.19)))
-    enter=ease(elapsed/.36)
-    leave=min(1.,remaining/.22)
-    paper=Image.new('RGBA',title.size)
-    pd=ImageDraw.Draw(paper)
-    pd.rounded_rectangle((0,0,title.width-1,title.height-1),radius=max(2,round(w*.008)),fill=(247,246,239,250))
-    # A restrained numbered folio supplies rhythm, without invented topic labels.
-    face=editorial_font(max(9,round(w*.024)),'label')
-    pd.text((layers['pad'],layers['pad']),f"{item.get('_slot',0)+1:02d}",font=face,fill=(101,105,105,255))
-    reveal=max(1,round(paper.width*enter))
-    paper.putalpha(paper.getchannel('A').point(lambda a:round(a*leave)))
-    panel=Image.new('RGBA',paper.size)
-    panel.alpha_composite(paper.crop((0,0,reveal,paper.height)),(0,0))
-    # Main message becomes fully readable quickly, then stays still through the hold.
-    for index,layer in enumerate((title,detail)):
-        p=ease((elapsed-(.10 if index==0 else .20))/(.24 if index==0 else .32))
+    # Alternate upper-left, lower-right, upper-right and lower-left safe areas.
+    align_right=slot in (1,2); upper=slot in (0,2)
+    x=round(w*.07) if not align_right else w-title.width-round(w*.07)
+    y=round(h*.19) if upper else round(h*.64)
+    y=min(y,h-title.height-round(h*.18))
+    fade=min(1.,elapsed/.22,remaining/.25)
+    canvas=frame.convert('RGBA')
+    for i,layer in enumerate((title,detail)):
+        p=ease((elapsed-i*.13)/.46)
+        opacity=min(1.,max(0.,(elapsed-i*.13)/.2),remaining/.25)
+        from PIL import ImageChops
         im=layer.copy()
-        im.putalpha(im.getchannel('A').point(lambda a:round(a*p*leave)))
-        offset=round((1-p)*w*.025)
-        if offset<im.height:
-            panel.alpha_composite(im.crop((0,0,im.width,im.height-offset)),(0,offset))
-    shadow=Image.new('RGBA',(w,h)); sd=ImageDraw.Draw(shadow)
-    sd.rounded_rectangle((x,y+round(w*.01),x+reveal,y+title.height+round(w*.01)),radius=round(w*.015),fill=(0,0,0,round(48*enter*leave)))
-    canvas=Image.alpha_composite(frame.convert('RGBA'),shadow.filter(ImageFilter.GaussianBlur(w*.018)))
-    canvas.alpha_composite(panel,(x,y))
-    return canvas.convert('RGB')
+        mask=Image.new('L',im.size); md=ImageDraw.Draw(mask)
+        count=max(0,visible-(len(glyphs[0]) if i else 0))
+        for j,box in enumerate(glyphs[i][:count]):
+            global_index=j+(len(glyphs[0]) if i else 0)
+            amount=max(0.,min(1.,typed-global_index))
+            md.rectangle(box,fill=round(255*ease(amount)))
+        im.putalpha(ImageChops.multiply(im.getchannel('A'),mask).point(lambda a:round(a*min(1.,remaining/.25))))
+        dx=round((1-p)*w*.018)*(1 if align_right else -1)
+        dy=round((1-p)*h*.008)
+        # Each visible line gets its own tight backplate, growing as letters type.
+        shade=Image.new('RGBA',(w,h)); sd=ImageDraw.Draw(shade)
+        rows=sorted(set((box[1],box[3]) for box in glyphs[i][:count]))
+        for top,bottom in rows:
+            top=max(0,top); bottom=min(im.height,bottom)
+            if bottom<=top: continue
+            bounds=im.getchannel('A').crop((0,top,im.width,bottom)).getbbox()
+            if not bounds: continue
+            left,yt,right_edge,yb=bounds
+            px=max(4,round(w*.014)); py=max(3,round(w*.008))
+            sd.rounded_rectangle((x+dx+left-px,y+dy+top+yt-py,x+dx+right_edge+px,y+dy+top+yb+py),radius=max(3,round(w*.012)),fill=(12,16,22,round(210*fade)),outline=(235,239,245,round(32*fade)),width=1)
+        canvas=Image.alpha_composite(canvas,shade)
+        canvas.alpha_composite(im,(x+dx,y+dy))
+    ink=Image.new('RGBA',(w,h)); d=ImageDraw.Draw(ink)
+    color=(255,209,105,round(245*fade))
+    # A tiny typing cursor follows the newest glyph, then fades away.
+    if 0 < visible < total and int(elapsed*8)%2 == 0:
+        group=0 if visible<=len(glyphs[0]) else 1
+        pos=visible-1 if group==0 else visible-len(glyphs[0])-1
+        box=glyphs[group][pos]
+        d.line((x+box[2]+3,y+box[1]+3,x+box[2]+3,y+box[3]-3),fill=color,width=max(2,round(w*.005)))
+    return Image.alpha_composite(canvas,ink).convert('RGB')
 
 
 def typing_audio(path,plan,duration):
@@ -190,7 +190,7 @@ def typing_audio(path,plan,duration):
         f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate); f.writeframes(samples.tobytes())
 
 
-def render(source, output, plan, progress=None, typing_sound=False):
+def render(source, output, plan, progress=None, typing_sound=True):
     source=Path(source).resolve(); output=Path(output).resolve()
     if source==output: raise ValueError('Output must differ from source')
     meta=probe(source); v=next(s for s in meta['streams'] if s['codec_type']=='video')
@@ -255,5 +255,4 @@ def main():
     render(args.video,args.output,plan)
 
 if __name__=='__main__': main()
-
 
