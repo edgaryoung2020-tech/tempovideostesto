@@ -95,7 +95,7 @@ def card(item, width):
             glyphs[0].append((round((pad+d.textlength(line[:j],font=f))/scale)-2,round(y/scale)-2,round((pad+d.textlength(line[:j+1],font=f))/scale)+3,round((y+lh)/scale)))
         y+=lh
     for line in labels:
-        ImageDraw.Draw(detail).text((pad,y+gap-small.getbbox(line)[1]),line,font=small,fill=(245,244,235,255),stroke_width=scale,stroke_fill=(12,16,23,190))
+        ImageDraw.Draw(detail).text((pad,y+gap-small.getbbox(line)[1]),line,font=small,fill=(255,209,105,255),stroke_width=scale,stroke_fill=(12,16,23,190))
         for j,ch in enumerate(line):
             glyphs[1].append((round((pad+d.textlength(line[:j],font=small))/scale)-2,round((y+gap)/scale)-2,round((pad+d.textlength(line[:j+1],font=small))/scale)+3,round((y+gap+sh)/scale)))
         y+=sh
@@ -140,20 +140,11 @@ def compose(frame,item,layers,elapsed,remaining):
             if not bounds: continue
             left,yt,right,yb=bounds
             px=max(4,round(w*.014)); py=max(3,round(w*.008))
-            sd.rounded_rectangle((x+dx+left-px,y+dy+top+yt-py,x+dx+right+px,y+dy+top+yb+py),radius=max(3,round(w*.012)),fill=(15,18,24,round(165*fade)))
+            sd.rounded_rectangle((x+dx+left-px,y+dy+top+yt-py,x+dx+right+px,y+dy+top+yb+py),radius=max(3,round(w*.012)),fill=(15,18,24,round(195*fade)))
         canvas=Image.alpha_composite(canvas,shade)
         canvas.alpha_composite(im,(x+dx,y+dy))
     ink=Image.new('RGBA',(w,h)); d=ImageDraw.Draw(ink)
     color=(255,209,105,round(245*fade))
-    # Straight, drawn-on underline; the endpoint advances with the entrance.
-    title_bounds=title.getbbox()
-    length=min((title_bounds[2]-title_bounds[0]) if title_bounds else w*.2,w*.55)
-    progress=ease((elapsed-.12)/.55)
-    points=[]
-    for n in range(max(2,round(60*progress))):
-        t=n/59
-        points.append((x+w*.018+length*t,y+baseline+h*.007))
-    d.line(points,fill=color,width=max(2,round(w*.006)),joint='curve')
     # A tiny typing cursor follows the newest glyph, then fades away.
     if 0 < visible < total and int(elapsed*8)%2 == 0:
         group=0 if visible<=len(glyphs[0]) else 1
