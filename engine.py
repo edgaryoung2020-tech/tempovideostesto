@@ -81,7 +81,7 @@ def card(item, width):
         if len(lines)<=3 and all(d.textlength(v,font=f)<=w-2*pad for v in lines): break
         size-=2
         if size<12: raise ValueError('Overlay text cannot fit')
-    small=font(max(12,round(width*.0425))*scale,False)
+    small=font(max(12,round(width*.053))*scale,True)
     labels=wrap(d,item['label'],small,w-2*pad)
     lh=round(size*1.35); sh=round(small.size*1.45)
     gap=round(width*.025)*scale
@@ -119,11 +119,6 @@ def compose(frame,item,layers,elapsed,remaining):
     y=min(y,h-title.height-round(h*.18))
     fade=min(1.,elapsed/.22,remaining/.25)
     canvas=frame.convert('RGBA')
-    # Translucent rounded backplate remains legible on white or busy footage.
-    shade=Image.new('RGBA',(w,h)); sd=ImageDraw.Draw(shade)
-    padding=round(w*.025)
-    sd.rounded_rectangle((x-padding,y-padding,x+title.width+padding,y+title.height+padding),radius=round(w*.035),fill=(15,18,24,round(165*fade)))
-    canvas=Image.alpha_composite(canvas,shade)
     for i,layer in enumerate((title,detail)):
         p=ease((elapsed-i*.13)/.46)
         opacity=min(1.,max(0.,(elapsed-i*.13)/.2),remaining/.25)
@@ -134,11 +129,25 @@ def compose(frame,item,layers,elapsed,remaining):
         for box in glyphs[i][:count]: md.rectangle(box,fill=255)
         im.putalpha(ImageChops.multiply(im.getchannel('A'),mask).point(lambda a:round(a*min(1.,remaining/.25))))
         dx=round((1-p)*w*.045)*(1 if right else -1)
-        canvas.alpha_composite(im,(x+dx,y+round((1-p)*h*.008)))
+        dy=round((1-p)*h*.008)
+        # Each visible line gets its own tight backplate, growing as letters type.
+        shade=Image.new('RGBA',(w,h)); sd=ImageDraw.Draw(shade)
+        rows=sorted(set((box[1],box[3]) for box in glyphs[i][:count]))
+        for top,bottom in rows:
+            top=max(0,top); bottom=min(im.height,bottom)
+            if bottom<=top: continue
+            bounds=im.getchannel('A').crop((0,top,im.width,bottom)).getbbox()
+            if not bounds: continue
+            left,yt,right,yb=bounds
+            px=max(4,round(w*.014)); py=max(2,round(w*.004))
+            sd.rounded_rectangle((x+dx+left-px,y+dy+top+yt-py,x+dx+right+px,y+dy+top+yb+py),radius=max(3,round(w*.012)),fill=(15,18,24,round(165*fade)))
+        canvas=Image.alpha_composite(canvas,shade)
+        canvas.alpha_composite(im,(x+dx,y+dy))
     ink=Image.new('RGBA',(w,h)); d=ImageDraw.Draw(ink)
     color=(255,209,105,round(245*fade))
-    # Curved, drawn-on underline; the endpoint advances with the entrance.
-    length=min(title.width*.8,w*.42)
+    # Straight, drawn-on underline; the endpoint advances with the entrance.
+    title_bounds=title.getbbox()
+    length=min((title_bounds[2]-title_bounds[0]) if title_bounds else w*.2,w*.55)
     progress=ease((elapsed-.12)/.55)
     points=[]
     for n in range(max(2,round(60*progress))):
@@ -165,12 +174,11 @@ def typing_audio(path,plan,duration):
         count=len(item['text'])+len(item['label'])
         span=min(1.6,max(.45,(item['end']-item['start'])*.55))
         for j in range(count):
-            if j%2: continue  # sparse, restrained accompaniment
             offset=round((item['start']+j/max(1,count)*span)*rate)
-            for k in range(round(rate*.018)):
+            for k in range(round(rate*.028)):
                 if offset+k>=len(samples): break
-                envelope=math.exp(-k/(rate*.0035))
-                value=int(2400*envelope*(.7*rng.uniform(-1,1)+.3*math.sin(2*math.pi*1600*k/rate)))
+                envelope=math.exp(-k/(rate*.006))
+                value=int(9600*envelope*(.7*rng.uniform(-1,1)+.3*math.sin(2*math.pi*1600*k/rate)))
                 samples[offset+k]=max(-32768,min(32767,samples[offset+k]+value))
     with wave.open(str(path),'wb') as f:
         f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate); f.writeframes(samples.tobytes())
