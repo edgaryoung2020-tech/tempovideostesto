@@ -6,7 +6,7 @@ import os
 import subprocess as sp
 import tempfile
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 
 def probe(path):
@@ -69,32 +69,77 @@ def wrap(draw, text, f, width):
 
 
 def card(item, width):
-    # Render at 2x for clean Cyrillic edges and restrained, consistent geometry.
-    scale=2; w=int(width*.84)*scale; pad=int(width*.037)*scale
-    scratch=Image.new('RGBA',(w,1000)); d=ImageDraw.Draw(scratch)
-    size=int(width*(.075 if item['kind']=='stat' else .056))*scale
+    """Separate typographic layers, optically centered, rendered at 2x."""
+    scale = 2
+    w = int(width * .86) * scale
+    pad = max(8, int(width * .018)) * scale
+    d = ImageDraw.Draw(Image.new('RGBA', (w, 1)))
+    size = int(width * (.19 if item['kind'] == 'stat' else .105)) * scale
     while True:
-        f=font(max(12,size)); lines=wrap(d,item['text'],f,w-2*pad-14*scale)
-        if len(lines)<=3 and all(d.textlength(line,font=f)<=w-2*pad-14*scale for line in lines): break
-        size-=2
-        if size<12: raise ValueError('Overlay text cannot fit')
-    small=font(max(12,int(width*.024)*scale),False)
-    label=wrap(d,item['label'],small,w-2*pad-14*scale)
-    line_h=int(size*1.25); label_h=int(small.size*1.4)
-    h=2*pad+len(lines)*line_h+(len(label)*label_h+pad//2 if label else 0)
-    im=Image.new('RGBA',(w,h+12*scale)); d=ImageDraw.Draw(im)
-    d.rounded_rectangle((0,8*scale,w-1,h+8*scale),radius=24*scale,fill=(0,0,0,65))
-    d.rounded_rectangle((0,0,w-1,h),radius=24*scale,fill=(15,19,29,235),outline=(255,255,255,38),width=scale)
-    accent=(182,244,103,255)
-    d.rounded_rectangle((pad,pad,pad+5*scale,h-pad),radius=2*scale,fill=accent)
-    y=pad
+        f = font(max(12, size))
+        lines = wrap(d, item['text'], f, w - 2 * pad)
+        if len(lines) <= 3 and all(d.textlength(line, font=f) <= w-2*pad for line in lines):
+            break
+        size -= 2
+        if size < 12:
+            raise ValueError('Overlay text cannot fit')
+    small = font(max(14, int(width * .034)) * scale, False)
+    labels = wrap(d, item['label'], small, w-2*pad)
+    line_h = int(size * 1.18)
+    label_h = int(small.size * 1.4)
+    gap = int(width * .032) * scale
+    h = pad*2 + len(lines)*line_h + gap + len(labels)*label_h
+    title = Image.new('RGBA', (w, h)); draw = ImageDraw.Draw(title)
+    y = pad
     for line in lines:
-        d.text((pad+14*scale,y),line,font=f,fill=accent if item['kind'] in ('keyword','stat') else (246,247,249,255)); y+=line_h
-    if label:
-        y+=pad//2
-        for line in label:
-            d.text((pad+14*scale,y),line,font=small,fill=(181,190,205,255)); y+=label_h
-    return im.resize((w//scale,(h+12*scale)//scale),Image.Resampling.LANCZOS)
+        # textbbox top correction keeps Cyrillic ascenders inside the layer.
+        x = (w-draw.textlength(line, font=f))/2
+        draw.text((x, y-f.getbbox(line)[1]), line, font=f, fill=(250,250,252,255))
+        y += line_h
+    detail = Image.new('RGBA', (w,h)); draw = ImageDraw.Draw(detail)
+    y += gap
+    for line in labels:
+        x = (w-draw.textlength(line, font=small))/2
+        draw.text((x, y-small.getbbox(line)[1]), line, font=small, fill=(225,228,235,255))
+        y += label_h
+    return tuple(im.resize((w//scale,h//scale), Image.Resampling.LANCZOS) for im in (title,detail))
+
+
+def ease(value):
+    value = max(0., min(1., value))
+    return 1 - (1-value)**4
+
+
+def compose(frame, item, layers, elapsed, remaining):
+    """Keynote direction: quiet scrim, hero type and delayed supporting copy."""
+    w,h = frame.size
+    entrance = ease(elapsed/.65)
+    exit_alpha = min(1., remaining/.3)
+    opacity = min(1., elapsed/.24) * exit_alpha
+    # Soft local vignette preserves the footage without a visible card boundary.
+    scrim = Image.new('RGBA', (1,h))
+    pixels = scrim.load()
+    center = h*.68
+    for y in range(h):
+        pixels[0,y] = (5,7,12,int(145*opacity*math.exp(-((y-center)/(h*.19))**2)))
+    frame = Image.alpha_composite(frame.convert('RGBA'), scrim.resize((w,h)))
+    for index,layer in enumerate(layers):
+        delay = .16 if index else 0.
+        reveal = ease((elapsed-delay)/.55)
+        alpha = min(1., max(0.,(elapsed-delay)/.25)) * exit_alpha
+        if alpha <= 0:
+            continue
+        zoom = .975 + .025*entrance if index == 0 else 1.
+        graphic = layer.resize((max(1,round(layer.width*zoom)), max(1,round(layer.height*zoom))),Image.Resampling.LANCZOS)
+        # A brief soft-to-sharp entrance; no bouncing or decorative neon.
+        blur = (1-reveal)*w*.006
+        if blur > .3:
+            graphic = graphic.filter(ImageFilter.GaussianBlur(blur))
+        graphic.putalpha(graphic.getchannel('A').point(lambda a: round(a*alpha)))
+        y = round(h*.68-graphic.height/2+(1-reveal)*h*.025)
+        y = max(round(h*.08), min(y,h-graphic.height-round(h*.14)))
+        frame.alpha_composite(graphic, ((w-graphic.width)//2,y))
+    return frame.convert('RGB')
 
 
 def render(source, output, plan, progress=None):
@@ -122,14 +167,7 @@ def render(source, output, plan, progress=None):
                 frame=Image.frombytes('RGB',(w,h),raw); t=n/fps
                 for i,item in enumerate(plan):
                     if item['start']<=t<item['end']:
-                        elapsed=t-item['start']; remaining=item['end']-t
-                        p=min(1,elapsed/.38); eased=1-(1-p)**3
-                        alpha=min(1,elapsed/.18,remaining/.22)
-                        overlay=cards[i].copy()
-                        overlay.putalpha(overlay.getchannel('A').point(lambda x:int(x*alpha)))
-                        y=int(h*.71-overlay.height/2+(1-eased)*h*.035)
-                        y=max(int(h*.1),min(y,h-overlay.height-int(h*.12)))
-                        frame.paste(overlay,((w-overlay.width)//2,y),overlay)
+                        frame = compose(frame,item,cards[i],t-item['start'],item['end']-t)
                 encoder.stdin.write(frame.tobytes()); n+=1
                 if progress and n%30==0: progress(min(.99,n/fps/duration))
             encoder.stdin.close()
@@ -157,3 +195,4 @@ def main():
     render(args.video,args.output,plan)
 
 if __name__=='__main__': main()
+
