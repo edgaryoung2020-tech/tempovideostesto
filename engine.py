@@ -135,6 +135,23 @@ def compose(frame, item, layers, elapsed, remaining):
         blur = (1-reveal)*w*.006
         if blur > .3:
             graphic = graphic.filter(ImageFilter.GaussianBlur(blur))
+        # A single warm-white light pass, clipped to the headline glyphs.
+        # It vanishes after the entrance; footage never receives a flash.
+        if index == 0 and .06 < elapsed < .62:
+            phase = (elapsed-.06)/.56
+            band = Image.new('RGBA', graphic.size)
+            bd = ImageDraw.Draw(band)
+            center = (-.2+1.4*phase)*graphic.width
+            radius = max(2, round(graphic.width*.09))
+            strength = math.sin(math.pi*phase)*.85
+            for x in range(max(0,int(center-radius*3)),min(graphic.width,int(center+radius*3)+1)):
+                intensity = int(255*strength*math.exp(-((x-center)/radius)**2))
+                bd.line((x,0,x,graphic.height),fill=(255,224,171,intensity))
+            from PIL import ImageChops
+            band.putalpha(ImageChops.multiply(band.getchannel('A'),graphic.getchannel('A')))
+            halo = band.filter(ImageFilter.GaussianBlur(max(1,w*.006)))
+            graphic = Image.alpha_composite(graphic,halo)
+            graphic = Image.alpha_composite(graphic,band)
         graphic.putalpha(graphic.getchannel('A').point(lambda a: round(a*alpha)))
         y = round(h*.68-graphic.height/2+(1-reveal)*h*.025)
         y = max(round(h*.08), min(y,h-graphic.height-round(h*.14)))
