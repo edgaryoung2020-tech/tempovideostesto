@@ -75,26 +75,31 @@ def card(item, width):
     # Small editorial callouts; a maximum of three lines, never a full-screen title.
     scale=2; w=round(width*.65)*scale; pad=round(width*.018)*scale
     d=ImageDraw.Draw(Image.new('RGBA',(w,1)))
-    size=round(width*(.072 if item['kind']=='stat' else .058))*scale
+    size=round(width*(.090 if item['kind']=='stat' else .0725))*scale
     while True:
         f=font(max(12,size)); lines=wrap(d,item['text'],f,w-2*pad)
         if len(lines)<=3 and all(d.textlength(v,font=f)<=w-2*pad for v in lines): break
         size-=2
         if size<12: raise ValueError('Overlay text cannot fit')
-    small=font(max(12,round(width*.034))*scale,False)
+    small=font(max(12,round(width*.0425))*scale,False)
     labels=wrap(d,item['label'],small,w-2*pad)
     lh=round(size*1.35); sh=round(small.size*1.45)
     gap=round(width*.025)*scale
     h=pad*2+len(lines)*lh+gap+len(labels)*sh
     title=Image.new('RGBA',(w,h)); detail=title.copy()
     y=pad
+    glyphs=[[],[]]
     for line in lines:
-        ImageDraw.Draw(title).text((pad,y-f.getbbox(line)[1]),line,font=f,fill=(255,254,248,255),stroke_width=max(1,round(width*.002)*scale),stroke_fill=(12,16,23,180))
+        ImageDraw.Draw(title).text((pad,y-f.getbbox(line)[1]),line,font=f,fill=(255,254,248,255),stroke_width=max(1,round(width*.0025)*scale),stroke_fill=(12,16,23,180))
+        for j,ch in enumerate(line):
+            glyphs[0].append((round((pad+d.textlength(line[:j],font=f))/scale)-2,round(y/scale)-2,round((pad+d.textlength(line[:j+1],font=f))/scale)+3,round((y+lh)/scale)))
         y+=lh
     for line in labels:
         ImageDraw.Draw(detail).text((pad,y+gap-small.getbbox(line)[1]),line,font=small,fill=(245,244,235,255),stroke_width=scale,stroke_fill=(12,16,23,190))
+        for j,ch in enumerate(line):
+            glyphs[1].append((round((pad+d.textlength(line[:j],font=small))/scale)-2,round((y+gap)/scale)-2,round((pad+d.textlength(line[:j+1],font=small))/scale)+3,round((y+gap+sh)/scale)))
         y+=sh
-    return tuple(im.resize((w//scale,h//scale),Image.Resampling.LANCZOS) for im in (title,detail)),round((pad+len(lines)*lh)/scale)
+    return tuple(im.resize((w//scale,h//scale),Image.Resampling.LANCZOS) for im in (title,detail)),round((pad+len(lines)*lh)/scale),glyphs
 
 
 def ease(value):
@@ -102,7 +107,10 @@ def ease(value):
 
 
 def compose(frame,item,layers,elapsed,remaining):
-    w,h=frame.size; (title,detail),baseline=layers
+    w,h=frame.size; (title,detail),baseline,glyphs=layers
+    total=sum(map(len,glyphs))
+    typing_duration=min(1.6,max(.45,(item['end']-item['start'])*.55))
+    visible=min(total,max(0,int(elapsed/typing_duration*total)+1))
     slot=item.get('_slot',0)%4
     # Alternate upper-left, lower-right, upper-right and lower-left safe areas.
     right=slot in (1,2); upper=slot in (0,2)
@@ -118,7 +126,12 @@ def compose(frame,item,layers,elapsed,remaining):
     for i,layer in enumerate((title,detail)):
         p=ease((elapsed-i*.13)/.46)
         opacity=min(1.,max(0.,(elapsed-i*.13)/.2),remaining/.25)
-        im=layer.copy(); im.putalpha(im.getchannel('A').point(lambda a:round(a*opacity)))
+        from PIL import ImageChops
+        im=layer.copy()
+        mask=Image.new('L',im.size); md=ImageDraw.Draw(mask)
+        count=max(0,visible-(len(glyphs[0]) if i else 0))
+        for box in glyphs[i][:count]: md.rectangle(box,fill=255)
+        im.putalpha(ImageChops.multiply(im.getchannel('A'),mask).point(lambda a:round(a*min(1.,remaining/.25))))
         dx=round((1-p)*w*.045)*(1 if right else -1)
         canvas.alpha_composite(im,(x+dx,y+round((1-p)*h*.008)))
     ink=Image.new('RGBA',(w,h)); d=ImageDraw.Draw(ink)
@@ -131,27 +144,38 @@ def compose(frame,item,layers,elapsed,remaining):
         t=n/59
         points.append((x+w*.018+length*t,y+baseline+h*.007+math.sin(t*math.pi)*h*.004))
     d.line(points,fill=color,width=max(2,round(w*.006)),joint='curve')
-    # A dotted bent leader draws outward to an abstract endpoint, not a tracked object.
-    ax=x+title.width*.8 if not right else x+title.width*.18
-    ay=y-h*.025 if upper else y+title.height+h*.025
-    sign=-1 if upper else 1
-    path=[(ax,ay),(ax+(-1 if right else 1)*w*.065,ay+sign*h*.035),(ax+(-1 if right else 1)*w*.1,ay+sign*h*.075)]
-    travel=ease((elapsed-.28)/.65)
-    for seg in range(2):
-        a,b=path[seg],path[seg+1]
-        for j in range(10):
-            t=j/10
-            if (seg+t)/2>travel: break
-            u=min(1,t+.045)
-            d.line((a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[0]+(b[0]-a[0])*u,a[1]+(b[1]-a[1])*u),fill=color,width=max(2,round(w*.004)))
-    if travel>.98:
-        tip=path[-1]; prev=path[-2]; angle=math.atan2(tip[1]-prev[1],tip[0]-prev[0])
-        for offset in (-.55,.55):
-            d.line((tip[0],tip[1],tip[0]-w*.025*math.cos(angle+offset),tip[1]-w*.025*math.sin(angle+offset)),fill=color,width=max(2,round(w*.004)))
+    # A tiny typing cursor follows the newest glyph, then fades away.
+    if 0 < visible < total and int(elapsed*8)%2 == 0:
+        group=0 if visible<=len(glyphs[0]) else 1
+        pos=visible-1 if group==0 else visible-len(glyphs[0])-1
+        box=glyphs[group][pos]
+        d.line((x+box[2]+3,y+box[1]+3,x+box[2]+3,y+box[3]-3),fill=color,width=max(2,round(w*.005)))
     return Image.alpha_composite(canvas,ink).convert('RGB')
 
 
-def render(source, output, plan, progress=None):
+def typing_audio(path,plan,duration):
+    """Quiet dry key taps, synthesized locally without external music assets."""
+    import wave, random
+    from array import array
+    rate=24000
+    samples=array('h',[0])*math.ceil(duration*rate)
+    rng=random.Random(17)
+    for item in plan:
+        count=len(item['text'])+len(item['label'])
+        span=min(1.6,max(.45,(item['end']-item['start'])*.55))
+        for j in range(count):
+            if j%2: continue  # sparse, restrained accompaniment
+            offset=round((item['start']+j/max(1,count)*span)*rate)
+            for k in range(round(rate*.018)):
+                if offset+k>=len(samples): break
+                envelope=math.exp(-k/(rate*.0035))
+                value=int(400*envelope*(.7*rng.uniform(-1,1)+.3*math.sin(2*math.pi*1600*k/rate)))
+                samples[offset+k]=max(-32768,min(32767,samples[offset+k]+value))
+    with wave.open(str(path),'wb') as f:
+        f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate); f.writeframes(samples.tobytes())
+
+
+def render(source, output, plan, progress=None, typing_sound=True):
     source=Path(source).resolve(); output=Path(output).resolve()
     if source==output: raise ValueError('Output must differ from source')
     meta=probe(source); v=next(s for s in meta['streams'] if s['codec_type']=='video')
@@ -182,8 +206,19 @@ def render(source, output, plan, progress=None):
                 if progress and n%30==0: progress(min(.99,n/fps/duration))
             encoder.stdin.close()
             if decoder.wait()!=0 or encoder.wait()!=0: raise RuntimeError('FFmpeg render failed')
-            # No voice generation, normalization, mixing or audio re-encoding.
-            sp.run(['ffmpeg','-v','error','-y','-i',str(silent),'-i',str(source),'-map','0:v:0','-map','1:a:0?','-c','copy','-map_metadata','-1','-movflags','+faststart',str(output)],check=True)
+            if typing_sound and plan:
+                sound=Path(td)/'typing.wav'
+                typing_audio(sound,plan,duration)
+                has_audio=any(v['codec_type']=='audio' for v in meta['streams'])
+                command=['ffmpeg','-v','error','-y','-i',str(silent),'-i',str(source),'-i',str(sound)]
+                if has_audio:
+                    command+=['-filter_complex','[1:a:0][2:a:0]amix=inputs=2:duration=first:normalize=0[a]','-map','0:v:0','-map','[a]']
+                else:
+                    command+=['-map','0:v:0','-map','2:a:0']
+                sp.run(command+['-c:v','copy','-c:a','aac','-b:a','192k','-map_metadata','-1','-movflags','+faststart',str(output)],check=True)
+            else:
+                sp.run(['ffmpeg','-v','error','-y','-i',str(silent),'-i',str(source),'-map','0:v:0','-map','1:a:0?','-c','copy','-map_metadata','-1','-movflags','+faststart',str(output)],check=True)
+
         finally:
             decoder.stdout.close()
             for proc in (decoder,encoder):
